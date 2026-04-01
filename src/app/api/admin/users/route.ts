@@ -18,8 +18,8 @@ export async function GET(req: Request) {
   const where = search
     ? {
         OR: [
-          { email: { contains: search, mode: "insensitive" as const } },
-          { nickname: { contains: search, mode: "insensitive" as const } },
+          { email: { contains: search } },
+          { nickname: { contains: search } },
         ],
       }
     : {};

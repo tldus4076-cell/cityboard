@@ -63,11 +63,11 @@ export async function GET(req: Request) {
     ],
   };
 
-  // Text search
+  // Text search (SQLite LIKE is case-insensitive for ASCII)
   if (q) {
     where.OR = [
-      { title: { contains: q, mode: "insensitive" } },
-      { content: { contains: q, mode: "insensitive" } },
+      { title: { contains: q } },
+      { content: { contains: q } },
     ];
   }
 
