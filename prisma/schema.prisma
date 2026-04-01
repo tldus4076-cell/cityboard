@@ -1,0 +1,301 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================
+// User & Auth
+// =============================================
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String?   // hashed, null for social login
+  nickname      String    @unique
+  profileImage  String?
+  role          Role      @default(USER)
+  isBlocked     Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  posts         Post[]
+  comments      Comment[]
+  likes         Like[]
+  bookmarks     Bookmark[]
+  reports       Report[]
+  blockedBy    UserBlock[] @relation("BlockedUser")
+  blockedUsers  UserBlock[] @relation("BlockedBy")
+  uploads       File[]
+
+  // Admin actions audit
+  adminActions   AdminAction[]
+
+  // Anonymous author reveal log (only admin can see real author)
+  anonymousPosts Post[] @relation("AnonymousAuthor")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token     String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// =============================================
+// Board & Post
+// =============================================
+
+enum BoardType {
+  FREE      // 자유게시판
+  NOTICE    // 공지사항
+  QNA       // 질문게시판
+  RESOURCE  // 자료실
+}
+
+enum PostType {
+  NORMAL    // 일반글
+  NOTICE    // 공지글 (관리자만)
+  SECRET    // 비밀글 (작성자/관리자만 열람)
+  ANONYMOUS // 익명글
+}
+
+model Board {
+  id          String     @id @default(cuid())
+  type        BoardType  @unique
+  name        String
+  description String?
+  createdAt   DateTime   @default(now())
+
+  posts       Post[]
+}
+
+model Post {
+  id          String    @id @default(cuid())
+  title       String
+  content     String
+  boardType   BoardType
+  postType    PostType  @default(NORMAL)
+  authorId    String
+  isHidden    Boolean   @default(false)  // 신고 5회 누적 시 자동 숨김
+  hiddenAt    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime? // soft delete
+
+  // For anonymous posts - admin can reveal real author
+  anonymousAuthorId String?
+  anonymousAuthor   User?   @relation("AnonymousAuthor", fields: [anonymousAuthorId], references: [id])
+
+  // Relations
+  author      User      @relation(fields: [authorId], references: [id])
+  board       Board     @relation(fields: [boardType], references: [type])
+  comments    Comment[]
+  likes       Like[]
+  bookmarks   Bookmark[]
+  reports     Report[]
+  files       File[]
+}
+
+// =============================================
+// Comment
+// =============================================
+
+model Comment {
+  id        String    @id @default(cuid())
+  content   String
+  authorId  String
+  postId    String
+  parentId  String?   // 대댓글용 (null = 원댓글)
+  isHidden  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  // Relations
+  author    User      @relation(fields: [authorId], references: [id])
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parent    Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentReplies")
+  likes     Like[]
+  reports   Report[]
+}
+
+// =============================================
+// Like
+// =============================================
+
+model Like {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String?
+  commentId String?
+  createdAt DateTime @default(now())
+
+  user     User      @relation(fields: [userId], references: [id])
+  post     Post?     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment  Comment?  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@unique([userId, commentId])
+}
+
+// =============================================
+// Bookmark
+// =============================================
+
+model Bookmark {
+  id        String   @id @default(cuid())
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id])
+  post Post  @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+}
+
+// =============================================
+// Report
+// =============================================
+
+enum ReportReason {
+  ABUSE          // 욕설/비방
+  SPAM           // 스팸/광고
+  INAPPROPRIATE  // 불건전한 내용
+  PERSONAL_INFO  // 개인정보 노출
+  OTHER          // 기타
+}
+
+enum ReportStatus {
+  PENDING   // 대기중
+  RESOLVED  // 처리됨 (복원)
+  REJECTED  // 기각 (삭제)
+}
+
+model Report {
+  id         String        @id @default(cuid())
+  reporterId String
+  postId     String?
+  commentId  String?
+  reason     ReportReason
+  status     ReportStatus  @default(PENDING)
+  memo       String?       // 관리자 메모
+  createdAt  DateTime      @default(now())
+  resolvedAt DateTime?
+
+  reporter  User     @relation(fields: [reporterId], references: [id])
+  post      Post?    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  comment   Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  // 중복 신고 방지:同一 사용자가同一 대상을 중복 신고 못함
+  @@unique([reporterId, postId])
+  @@unique([reporterId, commentId])
+}
+
+// =============================================
+// File Upload
+// =============================================
+
+model File {
+  id           String   @id @default(cuid())
+  filename     String   // 저장된 파일명 (uuid)
+  originalName String   // 원본 파일명
+  mimeType     String
+  size         Int      // bytes
+  url          String   // 접근 URL
+  uploaderId   String
+  postId       String?
+  createdAt    DateTime @default(now())
+
+  uploader User   @relation(fields: [uploaderId], references: [id])
+  post     Post?  @relation(fields: [postId], references: [id], onDelete: SetNull)
+}
+
+// =============================================
+// User Block (관리자의 회원 차단)
+// =============================================
+
+model UserBlock {
+  id         String   @id @default(cuid())
+  blockedId  String
+  blockedById String
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  blocked   User @relation("BlockedUser", fields: [blockedId], references: [id])
+  blockedBy User @relation("BlockedBy", fields: [blockedById], references: [id])
+
+  @@unique([blockedId, blockedById])
+}
+
+// =============================================
+// Admin Action Audit Log
+// =============================================
+
+enum AdminActionType {
+  DELETE_POST
+  RESTORE_POST
+  HIDE_POST
+  UNHIDE_POST
+  BLOCK_USER
+  UNBLOCK_USER
+  DELETE_COMMENT
+  REVEAL_ANONYMOUS_AUTHOR
+  PROCESS_REPORT
+}
+
+model AdminAction {
+  id         String         @id @default(cuid())
+  adminId    String
+  action     AdminActionType
+  targetType String?        // "Post", "Comment", "User", "Report"
+  targetId   String?
+  memo       String?
+  createdAt  DateTime       @default(now())
+
+  admin User @relation(fields: [adminId], references: [id])
+}
