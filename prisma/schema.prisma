@@ -20,10 +20,12 @@ model User {
   password      String?   // hashed, null for social login
   nickname      String    @unique
   profileImage  String?
-  role          String    @default("USER") // USER | ADMIN
-  isBlocked     Boolean   @default(false)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  role           String    @default("USER") // USER | ADMIN
+  isBlocked      Boolean   @default(false)
+  suspendedUntil DateTime? // 정지 만료일 (null이면 정상)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   // Relations
   accounts        Account[]
