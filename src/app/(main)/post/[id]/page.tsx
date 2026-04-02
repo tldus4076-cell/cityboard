@@ -3,8 +3,7 @@ import { notFound } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { formatDateTime } from "@/lib/utils";
+import PostActions from "@/components/posts/post-actions";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -13,6 +12,8 @@ interface PageProps {
 export default async function PostPage({ params }: PageProps) {
   const { id } = await params;
   const session = await auth();
+  const isAdmin = session?.user?.role === "ADMIN";
+  const userId = session?.user?.id;
 
   const post = await prisma.post.findUnique({
     where: { id, deletedAt: null },
@@ -20,7 +21,7 @@ export default async function PostPage({ params }: PageProps) {
       author: { select: { id: true, nickname: true, profileImage: true, role: true } },
       board: true,
       files: true,
-      likes: { where: { userId: session?.user?.id } },
+      likes: userId ? { where: { userId } } : false,
       _count: { select: { likes: true, comments: true } },
     },
   });
@@ -30,8 +31,7 @@ export default async function PostPage({ params }: PageProps) {
   }
 
   // Secret post visibility check
-  const isAuthor = session?.user?.id === post.authorId;
-  const isAdmin = session?.user?.role === "ADMIN";
+  const isAuthor = userId === post.authorId;
 
   if (post.postType === "SECRET" && !isAuthor && !isAdmin) {
     return (
@@ -62,17 +62,20 @@ export default async function PostPage({ params }: PageProps) {
 
   // Fetch comments
   const comments = await prisma.comment.findMany({
-    where: { postId: id, deletedAt: null, parentId: null },
+    where: { postId: id, parentId: null, ...(isAdmin ? {} : { deletedAt: null }) },
     include: {
       author: { select: { id: true, nickname: true, profileImage: true } },
+      _count: { select: { likes: true } },
+      likes: userId ? { where: { userId } } : false,
       replies: {
-        where: { deletedAt: null },
+        where: isAdmin ? {} : { deletedAt: null },
         include: {
           author: { select: { id: true, nickname: true, profileImage: true } },
+          _count: { select: { likes: true } },
+          likes: userId ? { where: { userId } } : false,
         },
         orderBy: { createdAt: "asc" },
       },
-      _count: { select: { likes: true } },
     },
     orderBy: { createdAt: "asc" },
   });
@@ -91,7 +94,8 @@ export default async function PostPage({ params }: PageProps) {
     RESOURCE: "자료실",
   };
 
-  const isLiked = post.likes.length > 0;
+  const isLiked = post.likes && post.likes.length > 0;
+  const currentUser = session?.user ? { id: session.user.id, role: session.user.role } : null;
 
   return (
     <div className="min-h-screen city-bg">
@@ -120,16 +124,16 @@ export default async function PostPage({ params }: PageProps) {
             <div className="flex gap-2">
               {isAuthor && (
                 <Link href={`/write/${post.id}`}>
-                  <Button size="sm" variant="ghost" className="text-white/60 hover:text-white">
+                  <button className="text-white/60 hover:text-white text-sm px-3 py-1 rounded hover:bg-white/10 transition">
                     수정
-                  </Button>
+                  </button>
                 </Link>
               )}
               {(isAuthor || isAdmin) && (
                 <form action={`/api/posts/${post.id}?delete=true`} method="POST">
-                  <Button size="sm" variant="ghost" className="text-red-400 hover:text-red-300">
+                  <button type="submit" className="text-red-400 hover:text-red-300 text-sm px-3 py-1 rounded hover:bg-red-500/10 transition">
                     삭제
-                  </Button>
+                  </button>
                 </form>
               )}
             </div>
@@ -144,11 +148,9 @@ export default async function PostPage({ params }: PageProps) {
                 : post.author.nickname}
             </span>
             <span>·</span>
-            <span>{formatDateTime(post.createdAt)}</span>
+            <span>{new Date(post.createdAt).toLocaleDateString("ko-KR")}</span>
             <span>·</span>
             <span>💬 {post._count.comments}</span>
-            <span>·</span>
-            <span>❤️ {post._count.likes}</span>
           </div>
 
           {/* Files */}
@@ -177,90 +179,15 @@ export default async function PostPage({ params }: PageProps) {
             </p>
           </div>
 
-          {/* Like Button */}
-          <div className="mt-8 pt-6 border-t border-white/10">
-            <form action={`/api/likes`} method="POST">
-              <input type="hidden" name="postId" value={post.id} />
-              <Button
-                type="submit"
-                variant={isLiked ? "default" : "outline"}
-                className={isLiked ? "bg-red-500 hover:bg-red-400" : "border-white/20 text-white hover:bg-white/10"}
-              >
-                ❤️ {post._count.likes}
-              </Button>
-            </form>
-          </div>
+          {/* Post Actions (Client Component) */}
+          <PostActions
+            postId={post.id}
+            initialLikes={post._count.likes}
+            initialComments={comments as any}
+            initialIsLiked={isLiked}
+            currentUser={currentUser}
+          />
         </article>
-
-        {/* Comments */}
-        <section>
-          <h2 className="text-white font-semibold mb-4">
-            💬 댓글 {post._count.comments}
-          </h2>
-
-          {/* Comment Form */}
-          {session?.user ? (
-            <form action={`/api/comments`} method="POST" className="mb-6">
-              <input type="hidden" name="postId" value={post.id} />
-              <textarea
-                name="content"
-                placeholder="댓글을 작성해주세요..."
-                className="w-full bg-white/10 border border-white/20 rounded-lg p-3 text-white placeholder:text-white/40 resize-none min-h-[80px]"
-                required
-                maxLength={1000}
-              />
-              <div className="flex justify-end mt-2">
-                <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-500">
-                  댓글 작성
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <p className="text-white/50 text-sm mb-6">
-              댓글을 작성하려면{" "}
-              <Link href="/login" className="text-blue-400 hover:underline">
-                로그인
-              </Link>
-              해주세요.
-            </p>
-          )}
-
-          {/* Comment List */}
-          <div className="space-y-4">
-            {comments.map((comment) => (
-              <div key={comment.id} className="bg-white/5 border border-white/10 rounded-lg p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <span className="text-white font-medium text-sm">
-                    {comment.author.nickname}
-                  </span>
-                  <span className="text-white/40 text-xs">
-                    {formatDateTime(comment.createdAt)}
-                  </span>
-                </div>
-                <p className="text-white/80 text-sm">{comment.content}</p>
-
-                {/* Replies */}
-                {comment.replies.length > 0 && (
-                  <div className="mt-3 ml-4 pl-4 border-l border-white/10 space-y-3">
-                    {comment.replies.map((reply) => (
-                      <div key={reply.id}>
-                        <div className="flex items-start justify-between mb-1">
-                          <span className="text-white/60 text-xs">
-                            ↳ {reply.author.nickname}
-                          </span>
-                          <span className="text-white/30 text-xs">
-                            {formatDateTime(reply.createdAt)}
-                          </span>
-                        </div>
-                        <p className="text-white/70 text-xs">{reply.content}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
       </div>
     </div>
   );

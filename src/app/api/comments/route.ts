@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { createCommentSchema } from "@/lib/validators";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -12,16 +11,15 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const parsed = createCommentSchema.safeParse(body);
+    const { content, postId, parentId, isAnonymous } = body;
 
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.errors[0].message },
-        { status: 400 }
-      );
+    if (!content?.trim() || !postId) {
+      return NextResponse.json({ error: "내용과 게시글을 입력해주세요" }, { status: 400 });
     }
 
-    const { content, postId, parentId } = parsed.data;
+    if (content.length > 1000) {
+      return NextResponse.json({ error: "댓글은 1,000자 이하여야 합니다" }, { status: 400 });
+    }
 
     // 대댓글 depth check (1단계만)
     if (parentId) {
@@ -36,13 +34,16 @@ export async function POST(req: Request) {
 
     const comment = await prisma.comment.create({
       data: {
-        content,
+        content: content.trim(),
         authorId: session.user.id,
         postId,
         parentId: parentId || null,
+        isAnonymous: !!isAnonymous,
+        anonymousAuthorId: !!isAnonymous ? session.user.id : null,
       },
       include: {
         author: { select: { id: true, nickname: true, profileImage: true } },
+        _count: { select: { likes: true } },
       },
     });
 
@@ -56,19 +57,28 @@ export async function POST(req: Request) {
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const postId = searchParams.get("postId");
+  const session = await auth();
+  const isAdmin = session?.user?.role === "ADMIN";
+  const userId = session?.user?.id;
 
   if (!postId) {
     return NextResponse.json({ error: "postId가 필요합니다" }, { status: 400 });
   }
 
+  // Deleted comments: admin만 볼 수 있음
   const comments = await prisma.comment.findMany({
-    where: { postId, deletedAt: null, parentId: null },
+    where: { postId, parentId: null, ...(isAdmin ? {} : { deletedAt: null }) },
     include: {
       author: { select: { id: true, nickname: true, profileImage: true } },
+      _count: { select: { likes: true } },
+      // Check if current user liked this comment
+      likes: userId ? { where: { userId } } : false,
       replies: {
-        where: { deletedAt: null },
+        where: isAdmin ? {} : { deletedAt: null },
         include: {
           author: { select: { id: true, nickname: true, profileImage: true } },
+          _count: { select: { likes: true } },
+          likes: userId ? { where: { userId } } : false,
         },
         orderBy: { createdAt: "asc" },
       },
