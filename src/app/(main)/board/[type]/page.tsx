@@ -1,16 +1,15 @@
 import Link from "next/link";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/utils";
+import PostList from "@/components/posts/post-list";
 
-const BOARD_INFO = {
+const BOARD_INFO: Record<string, { name: string; icon: string; color: string; desc: string }> = {
   FREE: { name: "자유게시판", icon: "💬", color: "free", desc: "자유롭게 이야기를 나눠보세요" },
   NOTICE: { name: "공지사항", icon: "📢", color: "notice", desc: "중요한 안내 사항을 확인하세요" },
   QNA: { name: "질문게시판", icon: "❓", color: "qna", desc: "궁금한 것을 질문하고 답변을 구해보세요" },
   RESOURCE: { name: "자료실", icon: "📚", color: "resource", desc: "유용한 자료를 공유합니다" },
-} as const;
+};
 
 type BoardType = keyof typeof BOARD_INFO;
 
@@ -20,7 +19,7 @@ interface PageProps {
 
 export default async function BoardPage({ params }: PageProps) {
   const { type } = await params;
-  const boardType = type.toUpperCase() as BoardType;
+  const boardType = (type.toUpperCase() as BoardType) || "FREE";
 
   if (!BOARD_INFO[boardType]) {
     return (
@@ -35,44 +34,50 @@ export default async function BoardPage({ params }: PageProps) {
     );
   }
 
-  const board = BOARD_INFO[boardType];
   const session = await auth();
+  const board = BOARD_INFO[boardType];
 
-  // Fetch posts
-  const posts = await prisma.post.findMany({
-    where: {
-      boardType,
-      deletedAt: null,
-      // 숨김 글은 관리자와 작성자만 볼 수 있음
-      OR: [
-        { isHidden: false },
-        session?.user?.role === "ADMIN" ? {} : { authorId: session?.user?.id },
-      ],
-    },
-    include: {
-      author: { select: { id: true, nickname: true, profileImage: true } },
-      _count: { select: { comments: true, likes: true } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 30,
-  });
-
-  const postTypeLabels: Record<string, string> = {
-    NORMAL: "",
-    NOTICE: "📌",
-    SECRET: "🔒",
-    ANONYMOUS: "👤",
+  // Initial posts for SSR (first page)
+  const LIMIT = 20;
+  const where: any = {
+    deletedAt: null,
+    boardType,
+    OR: [
+      { isHidden: false },
+      session?.user?.role === "ADMIN"
+        ? {}
+        : session?.user?.id
+        ? { authorId: session.user.id }
+        : { authorId: "__none__" },
+    ],
   };
+
+  const [posts, total] = await Promise.all([
+    prisma.post.findMany({
+      where,
+      include: {
+        author: { select: { id: true, nickname: true, profileImage: true } },
+        _count: { select: { comments: true, likes: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: LIMIT,
+    }),
+    prisma.post.count({ where }),
+  ]);
+
+  const sessionUser = session?.user
+    ? { id: session.user.id, role: session.user.role }
+    : null;
 
   return (
     <div className="min-h-screen city-bg">
-      <div className="bg-black/60 backdrop-blur-sm">
-        {/* Header */}
-        <header className="border-b border-white/10">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+      {/* Header */}
+      <div className="bg-black/60 backdrop-blur-sm border-b border-white/10">
+        <div className="max-w-4xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Link href="/" className="text-xl">🌃</Link>
-              <span className="text-white/60">›</span>
+              <span className="text-white/40">›</span>
               <span className="text-white font-medium">{board.name}</span>
             </div>
             <div className="flex items-center gap-3">
@@ -89,85 +94,59 @@ export default async function BoardPage({ params }: PageProps) {
               )}
             </div>
           </div>
-        </header>
-
-        {/* Board Info */}
-        <div className="max-w-4xl mx-auto px-4 py-8">
-          <div className="flex items-center gap-4 mb-2">
-            <span className="text-5xl">{board.icon}</span>
-            <div>
-              <h1 className="text-3xl font-bold text-white">{board.name}</h1>
-              <p className="text-white/60">{board.desc}</p>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Posts */}
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="flex justify-between items-center mb-6">
-          <span className="text-white/60 text-sm">
-            {posts.length}개의 글
-          </span>
+      {/* Board Selection Tabs */}
+      <div className="max-w-4xl mx-auto px-4 pt-4">
+        <div className="flex gap-2 flex-wrap">
+          {Object.entries(BOARD_INFO).map(([key, info]) => (
+            <Link key={key} href={`/board/${key}`}>
+              <span className={`px-3 py-1.5 rounded-md text-sm transition ${
+                boardType === key
+                  ? "bg-white/20 text-white"
+                  : "bg-white/5 text-white/60 hover:bg-white/10"
+              }`}>
+                {info.icon} {info.name}
+              </span>
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      {/* Write Button */}
+      <div className="max-w-4xl mx-auto px-4 pt-4">
+        <div className="flex justify-between items-center mb-2">
+          <span className="text-white/50 text-sm">{total}개의 글</span>
           {(session?.user || boardType !== "RESOURCE") && (
             <Link href={`/write?board=${boardType}`}>
-              <Button className="bg-blue-600 hover:bg-blue-500">글쓰기</Button>
+              <Button size="sm" className="bg-blue-600 hover:bg-blue-500">글쓰기</Button>
             </Link>
           )}
         </div>
+      </div>
 
-        {posts.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-white/40 text-lg mb-4">아직 글이 없습니다</p>
+      {/* Post List (client component with load more) */}
+      <PostList
+        initialBoardType={boardType}
+        initialPosts={posts as any}
+        totalCount={total}
+        sessionUser={sessionUser as any}
+      />
+
+      {/* Empty State */}
+      {total === 0 && (
+        <div className="max-w-4xl mx-auto px-4 pb-8 text-center py-16">
+          <p className="text-white/40 text-lg mb-4">아직 글이 없습니다</p>
+          {session?.user && (
             <Link href={`/write?board=${boardType}`}>
               <Button variant="outline" className="border-white/20 text-white hover:bg-white/10">
                 첫 글 작성하기
               </Button>
             </Link>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {posts.map((post) => (
-              <Link key={post.id} href={`/post/${post.id}`}>
-                <div className="bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg p-4 transition cursor-pointer">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {post.postType !== "NORMAL" && (
-                          <Badge variant={post.postType.toLowerCase() as "secret" | "anonymous" | "notice"}>
-                            {postTypeLabels[post.postType]}
-                          </Badge>
-                        )}
-                        {post.isHidden && (
-                          <Badge variant="hidden">숨김</Badge>
-                        )}
-                      </div>
-                      <h3 className="text-white font-medium truncate">
-                        {post.title}
-                      </h3>
-                      <p className="text-white/50 text-sm mt-1 line-clamp-2">
-                        {post.content}
-                      </p>
-                    </div>
-                    <div className="text-right text-xs text-white/40 shrink-0">
-                      <p>{post._count.comments} 💬</p>
-                      <p>{post._count.likes} ❤️</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between mt-3 text-xs text-white/40">
-                    <span>
-                      {post.postType === "ANONYMOUS"
-                        ? "👤 익명"
-                        : post.author.nickname}
-                    </span>
-                    <span>{formatDate(post.createdAt)}</span>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
